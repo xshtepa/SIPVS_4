@@ -1,7 +1,16 @@
 package com.example.asiceverifier;
 
+import org.bouncycastle.cms.CMSSignedData;
+import org.bouncycastle.tsp.TimeStampToken;
 import org.w3c.dom.*;
 
+import java.security.MessageDigest;
+import java.io.*;
+import java.security.cert.*;
+
+import javax.xml.crypto.dsig.*;
+import javax.xml.crypto.dsig.dom.DOMSignContext;
+import javax.xml.crypto.dsig.dom.DOMValidateContext;
 import javax.xml.xpath.*;
 
 public final class XadesTVerifier {
@@ -12,6 +21,8 @@ public final class XadesTVerifier {
 
     private static final String ASIC_PREFIX = "http://uri.etsi.org/02918/";
 
+    private final TimeStampVerifier tsVerifier = new TimeStampVerifier();
+
     public void verify(Document doc, Config cfg) {
         // 1) Overenie profilu
         check1a_signatureVersion_and_xmlnsDs(doc);
@@ -20,6 +31,18 @@ public final class XadesTVerifier {
         // 2) Overenie XML Signature
         check2a_methods(doc, cfg);
         check2b_references(doc, cfg);
+
+        // 4a) Overenie časovej pečiatky
+        String ts = extractTimestamp(doc);
+        tsVerifier.verify(ts);
+
+        // 4b) Verify MessageImprint
+        TimeStampToken tsToken = extractTimestampToken(doc);
+        byte[] signatureValue = extractSignatureValue(doc);
+        tsVerifier.verifyMessageImprint(tsToken, signatureValue);
+
+        // 5) Core validation XML Signature
+        check5_coreValidation(doc);
     }
 
     // 1a: SignatureVersion namespace podľa profilu + Signature musí mať xmlns:ds (v scope)
@@ -152,6 +175,140 @@ public final class XadesTVerifier {
             }
         }
     }
+
+    // 4a: extract EncapsulatedTimeStamp (Base64) from XML
+    private String extractTimestamp(Document doc) {
+        Element ts = firstElement(doc, "//*[local-name()='EncapsulatedTimeStamp']");
+        if (ts == null) {
+            throw new VerificationException(Errors.TIMESTAMP_MISSING,
+                    "4a: Missing EncapsulatedTimeStamp.");
+        }
+
+        String text = ts.getTextContent().trim();
+        if (text.isEmpty()) {
+            throw new VerificationException(Errors.TIMESTAMP_EMPTY,
+                    "4a: EncapsulatedTimeStamp is empty.");
+        }
+
+        return text;
+    }
+
+    private TimeStampToken extractTimestampToken(Document doc) {
+        try {
+            String tsBase64 = extractTimestamp(doc);
+            byte[] tsBytes = java.util.Base64.getDecoder().decode(tsBase64);
+            CMSSignedData cms = new CMSSignedData(tsBytes);
+            return new TimeStampToken(cms);
+        } catch (Exception e) {
+            throw new VerificationException(Errors.TIMESTAMP_INVALID,
+                    "4b: Cannot parse TimeStampToken: " + e.getMessage());
+        }
+    }
+
+
+    // 4b: 
+    private byte[] extractSignatureValue(Document doc) {
+        Element sv = firstElement(doc, "//*[local-name()='SignatureValue']");
+        if (sv == null) {
+            throw new VerificationException(
+                    Errors.XMLSIG_SIGNATUREVALUE_MISSING,
+                    "4b: Missing ds:SignatureValue."
+            );
+        }
+
+        String base64 = sv.getTextContent().trim();
+        return java.util.Base64.getDecoder().decode(base64);
+    }
+
+    // 5
+    private java.security.cert.X509Certificate extractSigningCertificate(Document doc) {
+        Element x509Elem = firstElement(doc, "//*[local-name()='X509Certificate']");
+        if (x509Elem == null) {
+            throw new VerificationException(
+                    Errors.XMLSIG_KEYINFO_MISSING,
+                    "5b: Missing ds:X509Certificate in ds:KeyInfo."
+            );
+        }
+
+        try {
+            String base64 = x509Elem.getTextContent().trim();
+            byte[] certBytes = java.util.Base64.getDecoder().decode(base64);
+
+            java.io.ByteArrayInputStream bais = new java.io.ByteArrayInputStream(certBytes);
+            java.security.cert.CertificateFactory cf = java.security.cert.CertificateFactory.getInstance("X.509");
+            return (java.security.cert.X509Certificate) cf.generateCertificate(bais);
+        } catch (Exception e) {
+            throw new VerificationException(
+                    Errors.XMLSIG_KEYINFO_INVALID,
+                    "5b: Cannot parse X509Certificate from KeyInfo: " + e.getMessage()
+            );
+        }
+    }
+
+    private void check5_coreValidation(Document doc) {
+        try {
+            // nájdeme ds:Signature element
+            Element sigElem = firstElement(doc,
+                    "//*[local-name()='Signature' and namespace-uri()='" + DS_NS + "']");
+            if (sigElem == null) {
+                sigElem = firstElement(doc, "//*[local-name()='Signature']");
+            }
+            if (sigElem == null) {
+                throw new VerificationException(
+                        Errors.XMLSIG_SIGNATURE_ELEM_MISSING,
+                        "5: Missing ds:Signature for core validation."
+                );
+            }
+
+            // 5b: z KeyInfo vytiahni cert a public key
+            java.security.cert.X509Certificate signingCert = extractSigningCertificate(doc);
+            java.security.PublicKey publicKey = signingCert.getPublicKey();
+
+            // vytvoríme DOMValidateContext s public key
+            javax.xml.crypto.dsig.XMLSignatureFactory fac =
+                    javax.xml.crypto.dsig.XMLSignatureFactory.getInstance("DOM");
+
+            DOMValidateContext ctx = new DOMValidateContext(publicKey, sigElem);
+
+            // unmarshal ds:Signature
+            javax.xml.crypto.dsig.XMLSignature signature = fac.unmarshalXMLSignature(ctx);
+
+            // 5a: overenie všetkých referencií (DigestValue)
+            boolean allRefsValid = true;
+            for (Object o : signature.getSignedInfo().getReferences()) {
+                javax.xml.crypto.dsig.Reference ref = (javax.xml.crypto.dsig.Reference) o;
+                boolean refOk = ref.validate(ctx);
+                if (!refOk) {
+                    allRefsValid = false;
+                    String uri = ref.getURI();
+                    throw new VerificationException(
+                            Errors.XMLSIG_DIGESTVALUE_INVALID,
+                            "5a: DigestValue invalid for Reference URI='" + uri + "'."
+                    );
+                }
+            }
+
+            // 5b: overenie samotnej SignatureValue
+            boolean sigOk = signature.getSignatureValue().validate(ctx);
+            if (!sigOk) {
+                throw new VerificationException(
+                        Errors.XMLSIG_SIGNATUREVALUE_INVALID,
+                        "5b: ds:SignatureValue is NOT valid for SignedInfo."
+                );
+            }
+
+            System.out.println("[OK] Core XML Signature validation (5a,5b) passed.");
+
+        } catch (VerificationException ve) {
+            throw ve;
+        } catch (Exception e) {
+            throw new VerificationException(
+                    Errors.XMLSIG_CORE_VALIDATION_ERROR,
+                    "5: Core XML Signature validation failed: " + e.getMessage()
+            );
+        }
+    }
+
 
     // ---- helpers ----
     private static boolean hasDsNamespaceInScope(Element el) {
