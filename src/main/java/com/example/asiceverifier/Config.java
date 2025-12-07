@@ -3,6 +3,7 @@ package com.example.asiceverifier;
 import java.io.*;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
+import java.security.cert.X509CRL;
 import java.util.*;
 
 public final class Config {
@@ -35,6 +36,27 @@ public final class Config {
     public Set<String> signatureMethodUris() { return signatureMethodUris; }
     public Set<String> digestMethodUris() { return digestMethodUris; }
     public Set<String> transformUris() { return transformUris; }
+    private final List<String> containerFiles = new ArrayList<>();
+
+    private Date timestampTime;
+    private X509CRL lastCrl;
+
+    // getters & setters
+    public Date getTimestampTime() {
+        return timestampTime;
+    }
+
+    public void setTimestampTime(Date timestampTime) {
+        this.timestampTime = timestampTime;
+    }
+
+    public X509CRL getLastCrl() {
+        return lastCrl;
+    }
+
+    public void setLastCrl(X509CRL lastCrl) {
+        this.lastCrl = lastCrl;
+    }
 
     public static Config load(Path externalProperties) throws IOException {
         Properties p = new Properties();
@@ -78,5 +100,9 @@ public final class Config {
             if (!s.isEmpty()) out.add(s);
         }
         return out;
+    }
+
+    public List<String> getContainerFiles() {
+        return containerFiles;
     }
 }

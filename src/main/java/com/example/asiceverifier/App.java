@@ -61,9 +61,9 @@ public final class App {
             }
 
             Path target = files.get(idx - 1);
-            Document doc = reader.readSignatureXml(target);
-            verifier.verify(doc, cfg);
-            System.out.println("[OK] " + target.getFileName());
+
+            // --- populate containerFiles ---
+            populateContanerFiles(cfg, reader, verifier, target);
             return;
         }
 
@@ -74,13 +74,12 @@ public final class App {
 
             for (Path p : files) {
                 try {
-                    Document doc = reader.readSignatureXml(p);
-                    verifier.verify(doc, cfg);
-                    System.out.println("[OK] " + p.getFileName());
+                    // --- populate containerFiles ---
+                    populateContanerFiles(cfg, reader, verifier, p);
                 } catch (VerificationException ve) {
                     anyError = true;
-                    System.out.println("[ERROR] " + ve.code() + " - " + ve.getMessage() + " (file=" + p.getFileName() + ")");
-                    
+                    System.out.println("[ERROR] " + ve.code() + " - " + ve.getMessage() + " (file=" + p.getFileName() + ")\n");
+
                 }
             }
 
@@ -89,6 +88,17 @@ public final class App {
         }
 
         printHelp();
+    }
+
+    private static void populateContanerFiles(Config cfg, AsiceReader reader, XadesTVerifier verifier, Path p) throws IOException {
+        try (var zip = new java.util.zip.ZipFile(p.toFile())) {
+            cfg.getContainerFiles().clear();
+            zip.stream().forEach(e -> cfg.getContainerFiles().add(e.getName()));
+        }
+
+        Document doc = reader.readSignatureXml(p);
+        verifier.verify(doc, cfg);
+        System.out.println("[OK] " + p.getFileName());
     }
 
     private static List<Path> listSampleFiles(Path dir) throws IOException {
