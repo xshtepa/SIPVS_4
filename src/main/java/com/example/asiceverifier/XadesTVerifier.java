@@ -535,7 +535,7 @@ public final class XadesTVerifier {
                     "4a: Missing EncapsulatedTimeStamp.");
         }
 
-        String text = ts.getTextContent().trim();
+        String text = ts.getTextContent();
         if (text.isEmpty()) {
             throw new VerificationException(Errors.TIMESTAMP_EMPTY,
                     "4a: EncapsulatedTimeStamp is empty.");

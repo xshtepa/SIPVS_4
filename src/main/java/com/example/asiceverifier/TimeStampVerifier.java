@@ -24,8 +24,9 @@ public class TimeStampVerifier {
     // 4a — Verify timestamp certificate and CRL
     public void verify(String base64Timestamp) {
         try {
-            byte[] tsBytes = Base64.getDecoder().decode(base64Timestamp);
-            CMSSignedData cmsSignedData = new CMSSignedData(tsBytes);
+            byte[] tsResponseBytes = Base64.getDecoder()
+                    .decode(base64Timestamp.replaceAll("\\s+", ""));
+            CMSSignedData cmsSignedData = new CMSSignedData(tsResponseBytes);
             TimeStampToken tsToken = new TimeStampToken(cmsSignedData);
 
             // Extract TSA certificate 
