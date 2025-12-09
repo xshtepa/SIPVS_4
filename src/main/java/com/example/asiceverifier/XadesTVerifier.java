@@ -23,6 +23,7 @@ import java.util.Date;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
+
 public final class XadesTVerifier {
 
     private static final String DS_NS = Config.DS_NS;
@@ -46,14 +47,14 @@ public final class XadesTVerifier {
         // 3) Overenie platnosti podpisového certifikátu
         check3a_certificate(doc, cfg);
 
-        // 4a) Overenie časovej pečiatky
-        String ts = extractTimestamp(doc);
-        tsVerifier.verify(ts);
+        // 4a) Overenie časovej pečiatky – podpisového certifikátu TSA
+        String tsBase64 = extractTimestamp(doc);  // EncapsulatedTimeStamp z XML
+        tsVerifier.verifyTimestampCertificate(tsBase64);
 
         // 4b) Verify MessageImprint
-        TimeStampToken tsToken = extractTimestampToken(doc);
-        byte[] signatureValue = extractSignatureValue(doc);
-        tsVerifier.verifyMessageImprint(tsToken, signatureValue);
+        // TimeStampToken tsToken = extractTimestampToken(doc);
+        // byte[] signatureValue = extractSignatureValue(doc);   // Base64 decode ds:SignatureValue
+        // tsVerifier.verifyMessageImprint(tsToken, signatureValue);
 
         // 5) Core validation XML Signature
         check5_coreValidation(doc);
@@ -527,37 +528,41 @@ public final class XadesTVerifier {
         }
     }
 
-    // 4a: extract EncapsulatedTimeStamp (Base64) from XML
+    // 4
     private String extractTimestamp(Document doc) {
         Element ts = firstElement(doc, "//*[local-name()='EncapsulatedTimeStamp']");
         if (ts == null) {
-            throw new VerificationException(Errors.TIMESTAMP_MISSING,
-                    "4a: Missing EncapsulatedTimeStamp.");
+            throw new VerificationException(
+                    Errors.TIMESTAMP_MISSING,
+                    "4a: Missing EncapsulatedTimeStamp."
+            );
         }
 
-        String text = ts.getTextContent();
+        String text = ts.getTextContent().trim();
         if (text.isEmpty()) {
-            throw new VerificationException(Errors.TIMESTAMP_EMPTY,
-                    "4a: EncapsulatedTimeStamp is empty.");
+            throw new VerificationException(
+                    Errors.TIMESTAMP_EMPTY,
+                    "4a: EncapsulatedTimeStamp is empty."
+            );
         }
 
         return text;
     }
 
-    private TimeStampToken extractTimestampToken(Document doc) {
-        try {
-            String tsBase64 = extractTimestamp(doc);
-            byte[] tsBytes = java.util.Base64.getDecoder().decode(tsBase64);
-            CMSSignedData cms = new CMSSignedData(tsBytes);
-            return new TimeStampToken(cms);
-        } catch (Exception e) {
-            throw new VerificationException(Errors.TIMESTAMP_INVALID,
-                    "4b: Cannot parse TimeStampToken: " + e.getMessage());
-        }
-    }
+    // private TimeStampToken extractTimestampToken(Document doc) {
+    //     try {
+    //         String tsBase64 = extractTimestamp(doc);
+    //         byte[] tsBytes = Base64.getDecoder().decode(tsBase64);
+    //         CMSSignedData cms = new CMSSignedData(tsBytes);
+    //         return new TimeStampToken(cms);
+    //     } catch (Exception e) {
+    //         throw new VerificationException(
+    //                 Errors.TIMESTAMP_INVALID,
+    //                 "4b: Cannot parse TimeStampToken: " + e.getMessage()
+    //         );
+    //     }
+    // }
 
-
-    // 4b:
     private byte[] extractSignatureValue(Document doc) {
         Element sv = firstElement(doc, "//*[local-name()='SignatureValue']");
         if (sv == null) {
@@ -568,7 +573,7 @@ public final class XadesTVerifier {
         }
 
         String base64 = sv.getTextContent().trim();
-        return java.util.Base64.getDecoder().decode(base64);
+        return Base64.getDecoder().decode(base64);
     }
 
     // 5
